@@ -19,18 +19,18 @@ def get_version(rel_path: str) -> str:
 
 
 setup(
-    name='chris-plugin-template',
-    version=get_version('app.py'),
-    description='A ChRIS DS plugin template',
+    name='expand_from_white_fetal_parameterized',
+    version=get_version('expand_from_white_wrapper.py'),
+    description='A ChRIS plugin wrapper for modified CIVET expand_from_white where stretch weight and laplacian weight can be scaled by parameters.',
     author='FNNDSC',
     author_email='dev@babyMRI.org',
-    url='https://github.com/FNNDSC/python-chrisapp-template',
-    py_modules=['app'],
+    url='https://github.com/FNNDSC/ep-expand_from_white_fetal_parameterized',
+    py_modules=['expand_from_white_wrapper'],
     install_requires=['chris_plugin'],
     license='MIT',
     entry_points={
         'console_scripts': [
-            'commandname = app:main'
+            'expand_from_white_wrapper = expand_from_white_wrapper:main'
         ]
     },
     classifiers=[
