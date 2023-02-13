@@ -1,76 +1,103 @@
 #!/usr/bin/env python
-
-from pathlib import Path
+import os
+import subprocess as sp
+import sys
 from argparse import ArgumentParser, Namespace, ArgumentDefaultsHelpFormatter
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
+from typing import Optional
 
 from chris_plugin import chris_plugin, PathMapper
+from loguru import logger
 
 __version__ = '1.0.0'
 
-DISPLAY_TITLE = r"""
-                                                 _    __                              _     _ _          __     _        _                                          _            _             _ 
-                                                | |  / _|                            | |   (_) |        / _|   | |      | |                                        | |          (_)           | |
-  ___ _ __ ______ _____  ___ __   __ _ _ __   __| | | |_ _ __ ___  _ __ ___ __      _| |__  _| |_ ___  | |_ ___| |_ __ _| |    _ __   __ _ _ __ __ _ _ __ ___   ___| |_ ___ _ __ _ _______  __| |
- / _ \ '_ \______/ _ \ \/ / '_ \ / _` | '_ \ / _` | |  _| '__/ _ \| '_ ` _ \\ \ /\ / / '_ \| | __/ _ \ |  _/ _ \ __/ _` | |   | '_ \ / _` | '__/ _` | '_ ` _ \ / _ \ __/ _ \ '__| |_  / _ \/ _` |
-|  __/ |_) |    |  __/>  <| |_) | (_| | | | | (_| | | | | | | (_) | | | | | |\ V  V /| | | | | ||  __/ | ||  __/ || (_| | |   | |_) | (_| | | | (_| | | | | | |  __/ ||  __/ |  | |/ /  __/ (_| |
- \___| .__/      \___/_/\_\ .__/ \__,_|_| |_|\__,_| |_| |_|  \___/|_| |_| |_| \_/\_/ |_| |_|_|\__\___| |_| \___|\__\__,_|_|   | .__/ \__,_|_|  \__,_|_| |_| |_|\___|\__\___|_|  |_/___\___|\__,_|
-     | |                  | |                   ______                    ______                   ______               ______| |                                                                
-     |_|                  |_|                  |______|                  |______|                 |______|             |______|_|                                                                
-"""
-
-
-parser = ArgumentParser(description='!!!CHANGE ME!!! An example ChRIS plugin which '
-                                    'counts the number of occurrences of a given '
-                                    'word in text files.',
+parser = ArgumentParser(description='ChRIS plugin wrapper around a modified expand_from_white',
                         formatter_class=ArgumentDefaultsHelpFormatter)
-parser.add_argument('-w', '--word', required=True, type=str,
-                    help='word to count')
-parser.add_argument('-p', '--pattern', default='**/*.txt', type=str,
-                    help='input file filter glob')
+
+parser.add_argument('-l', '--laplacian-weight-coefficient', type=str, required=True, dest='lw',
+                    help='Laplacian weight coefficient')
+parser.add_argument('-s', '--stretch-weight-coefficient', type=str, required=True, dest='sw',
+                    help='Stretch weight coefficient')
+parser.add_argument('--side', type=str, default='auto',
+                    help='brain hemisphere, one of: left, right, auto')
+
+parser.add_argument('-t', '--threads', type=int, default=0,
+                    help='Number of threads to use for parallel jobs. '
+                         'Pass 0 to use number of visible CPUs.')
+parser.add_argument('--no-fail', dest='no_fail', action='store_true',
+                    help='Produce exit code 0 even if any subprocesses do not.')
 parser.add_argument('-V', '--version', action='version',
                     version=f'%(prog)s {__version__}')
 
 
-# The main function of this *ChRIS* plugin is denoted by this ``@chris_plugin`` "decorator."
-# Some metadata about the plugin is specified here. There is more metadata specified in setup.py.
-#
-# documentation: https://fnndsc.github.io/chris_plugin/chris_plugin.html#chris_plugin
 @chris_plugin(
     parser=parser,
     title='expand_from_white fetus CP experiment',
-    category='',                 # ref. https://chrisstore.co/plugins
-    min_memory_limit='100Mi',    # supported units: Mi, Gi
-    min_cpu_limit='1000m',       # millicores, e.g. "1000m" = 1 CPU core
-    min_gpu_limit=0              # set min_gpu_limit=1 to enable GPU
+    category='Experiment',
+    min_memory_limit='1Gi',
+    min_cpu_limit='1000m',
+    min_gpu_limit=0
 )
 def main(options: Namespace, inputdir: Path, outputdir: Path):
+    if options.threads > 0:
+        nproc = options.threads
+    else:
+        nproc = len(os.sched_getaffinity(0))
+    logger.info('Using {} threads.', nproc)
+
+    mapper = PathMapper.file_mapper(inputdir, outputdir, glob='**/*.mnc', suffix='.obj')
+    with ThreadPoolExecutor(max_workers=nproc) as pool:
+        results = pool.map(lambda t: run_surface_fit(*t, options.side, options.sw, options.lw), mapper)
+
+    if not options.no_fail and not all(results):
+        sys.exit(1)
+
+
+def run_surface_fit(grid: Path, output_surf: Path, given_side: str, sw: str, lw: str) -> bool:
     """
-    *ChRIS* plugins usually have two positional arguments: an **input directory** containing
-    input files and an **output directory** where to write output files. Command-line arguments
-    are passed to this main method implicitly when ``main()`` is called below without parameters.
-
-    :param options: non-positional arguments parsed by the parser given to @chris_plugin
-    :param inputdir: directory containing (read-only) input files
-    :param outputdir: directory where to write output files
+    :return: True if successful
     """
+    starting_surface = locate_surface_for(grid)
+    if starting_surface is None:
+        logger.error('No starting surface found for {}', grid)
+        return False
 
-    print(DISPLAY_TITLE)
+    side = select_side(given_side, grid)
+    cmd = ['expand_from_white_fetal_MNI.pl', side, starting_surface, output_surf, grid, sw, lw]
+    log_file = output_surf.with_name(output_surf.name + '.log')
+    logger.info('Starting: {}', ' '.join(map(str, cmd)))
+    with log_file.open('wb') as log_handle:
+        job = sp.run(cmd, stdout=log_handle, stderr=log_handle)
+    rc_file = log_file.with_suffix('.rc')
+    rc_file.write_text(str(job.returncode))
 
-    # Typically it's easier to think of programs as operating on individual files
-    # rather than directories. The helper functions provided by a ``PathMapper``
-    # object make it easy to discover input files and write to output files inside
-    # the given paths.
-    #
-    # Refer to the documentation for more options, examples, and advanced uses e.g.
-    # adding a progress bar and parallelism.
-    mapper = PathMapper.file_mapper(inputdir, outputdir, glob=options.pattern, suffix='.count.txt')
-    for input_file, output_file in mapper:
-        # The code block below is a small and easy example of how to use a ``PathMapper``.
-        # It is recommended that you put your functionality in a helper function, so that
-        # it is more legible and can be unit tested.
-        data = input_file.read_text()
-        frequency = data.count(options.word)
-        output_file.write_text(str(frequency))
+    if job.returncode == 0:
+        logger.info('Finished: {} -> {}', starting_surface, output_surf)
+        return True
+
+    logger.error('FAILED -- check log file for details: {}', log_file)
+    return False
+
+
+def select_side(given_side: str, input_path: Path):
+    if given_side != 'auto':
+        return f'-{given_side}'
+    lower_path = str(input_path).lower()
+    if 'left' in lower_path:
+        return '-left'
+    if 'right' in lower_path:
+        return '-right'
+    raise ValueError(f'Cannot determine side for {input_path}')
+
+
+def locate_surface_for(mask: Path) -> Optional[Path]:
+    glob = mask.parent.glob('*.obj')
+    first = next(glob, None)
+    second = next(glob, None)
+    if second is not None:
+        return None
+    return first
 
 
 if __name__ == '__main__':

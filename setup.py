@@ -22,11 +22,12 @@ setup(
     name='expand_from_white_fetal_parameterized',
     version=get_version('expand_from_white_wrapper.py'),
     description='A ChRIS plugin wrapper for modified CIVET expand_from_white where stretch weight and laplacian weight can be scaled by parameters.',
-    author='FNNDSC',
+    author='HyukJin Yun',
     author_email='dev@babyMRI.org',
     url='https://github.com/FNNDSC/ep-expand_from_white_fetal_parameterized',
     py_modules=['expand_from_white_wrapper'],
-    install_requires=['chris_plugin'],
+    scripts=['expand_from_white_fetal_MNI.pl'],
+    install_requires=['chris_plugin', 'loguru'],
     license='MIT',
     entry_points={
         'console_scripts': [
